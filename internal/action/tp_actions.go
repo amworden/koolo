@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hectorgimenez/d2go/pkg/data"
+	"github.com/hectorgimenez/d2go/pkg/data/area"
 	"github.com/hectorgimenez/d2go/pkg/data/object"
 	"github.com/hectorgimenez/koolo/internal/action/step"
 	"github.com/hectorgimenez/koolo/internal/context"
@@ -196,7 +197,7 @@ func UsePortalInTown() error {
 // UsePortalFrom searches for and uses a portal owned by the specified player.
 // Uses 5 retry attempts by default.
 func UsePortalFrom(owner string) error {
-	return UsePortalFromWithRetries(owner, 5)
+	return UsePortalFromWithRetries(owner, 3)
 }
 
 // UsePortalFromWithRetries searches for and uses a portal with configurable retries.
@@ -245,15 +246,51 @@ func UsePortalFromWithRetries(owner string, maxAttempts int) error {
 			}
 		}
 
-		// Portal not found - if more attempts left, wait and retry
+		// Portal not found - if more attempts left, retry
 		if attempt < maxAttempts-1 {
 			ctx.Logger.Debug("Portal not found, retrying...", "attempt", attempt+1, "owner", owner)
-			utils.Sleep(300)
-
 			// On later attempts, try moving to TP waiting area to get portal in range
 			if attempt >= 1 {
 				tpArea := town.GetTownByArea(ctx.Data.PlayerUnit.Area).TPWaitingArea(*ctx.Data)
 				_ = MoveToCoords(tpArea)
+			}
+		}
+	}
+
+	// Fallback: we may be in Lut Gholein after hiring merc (Act 2) while the TP is in another act (e.g. Act 3 leveling).
+	// Try waypointing to other act towns to find the portal.
+	if ctx.Data.PlayerUnit.Area == area.LutGholein {
+		if _, isLevelingChar := ctx.Char.(context.LevelingCharacter); isLevelingChar {
+			ctx.Logger.Info("Portal not found in current town; failing over to other act towns.")
+			otherTowns := []area.ID{area.RogueEncampment, area.KurastDocks, area.ThePandemoniumFortress, area.Harrogath}
+			for _, townArea := range otherTowns {
+				if err := WayPoint(townArea); err != nil {
+					continue
+				}
+				utils.PingSleep(utils.Medium, 400)
+				ctx.RefreshGameData()
+				for _, obj := range ctx.Data.Objects {
+					if obj.IsPortal() && obj.Owner == owner {
+						ctx.Logger.Info("Portal found in other act after merc hire; using it.", "town", townArea)
+						return InteractObjectByID(obj.ID, func() bool {
+							if errCheck := checkPlayerDeathForTP(ctx); errCheck != nil {
+								return false
+							}
+							if !ctx.Data.PlayerUnit.Area.IsTown() {
+								utils.PingSleep(utils.Medium, 500)
+								ctx.RefreshGameData()
+								if errCheck := checkPlayerDeathForTP(ctx); errCheck != nil {
+									return false
+								}
+								if err := ensureAreaSync(ctx, ctx.Data.PlayerUnit.Area); err != nil {
+									return false
+								}
+								return true
+							}
+							return false
+						})
+					}
+				}
 			}
 		}
 	}
