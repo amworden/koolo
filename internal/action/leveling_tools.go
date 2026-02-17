@@ -452,7 +452,11 @@ func HireMerc() error {
 
 		// Only hire in Normal difficulty
 		if ctx.CharacterCfg.Game.Difficulty == difficulty.Normal {
+			var waypointedToHire bool
+			var townBeforeHire area.ID
 			if ctx.Data.PlayerUnit.Area != area.LutGholein {
+				townBeforeHire = ctx.Data.PlayerUnit.Area
+				waypointedToHire = true
 				if err := WayPoint(area.LutGholein); err != nil {
 					if strings.Contains(err.Error(), "no available waypoint found to reach destination") {
 						ctx.Logger.Debug("Lut Gholein waypoint not unlocked, skipping merc hire.")
@@ -517,6 +521,13 @@ func HireMerc() error {
 
 			ctx.Logger.Info("Mercenary hiring routine complete.")
 			AutoEquip()
+
+			// Return to the town we were in so UsePortalInTown can find the portal (e.g. Act 3 leveling: TP is in Kurast Docks).
+			if waypointedToHire && ctx.Data.PlayerUnit.Area == area.LutGholein {
+				if err := WayPoint(townBeforeHire); err != nil {
+					ctx.Logger.Warn("Failed to waypoint back after merc hire; portal may be in another act.", "target", townBeforeHire, "error", err)
+				}
+			}
 		}
 	}
 
